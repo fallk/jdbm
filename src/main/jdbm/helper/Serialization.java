@@ -21,6 +21,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -558,22 +559,22 @@ public final class Serialization
 			min = Math.min(min, i);
 		}
 
-		if(0>=min && max<=255){
+		if(0<=min && max<=255){
 			da.write(ARRAY_LONG_B);
 			LongPacker.packInt(da,obj.length);
 			for(long l : obj)
 				da.write((int) l);
-		}else if(0>=min && max<=Long.MAX_VALUE){
+		}else if(0<=min && max<=Long.MAX_VALUE){
 			da.write(ARRAY_LONG_PACKED);
 			LongPacker.packInt(da,obj.length);
 			for(long l : obj)
 				LongPacker.packLong(da, l);			
-		}else if(Short.MIN_VALUE>=min && max<=Short.MAX_VALUE){
+		}else if(Short.MIN_VALUE<=min && max<=Short.MAX_VALUE){
 			da.write(ARRAY_LONG_S);
 			LongPacker.packInt(da,obj.length);
 			for(long l : obj)
 				da.writeShort((short) l);			
-		}else if(Integer.MIN_VALUE>=min && max<=Integer.MAX_VALUE){
+		}else if(Integer.MIN_VALUE<=min && max<=Integer.MAX_VALUE){
 			da.write(ARRAY_LONG_I);
 			LongPacker.packInt(da,obj.length);
 			for(long l : obj)
@@ -596,7 +597,7 @@ public final class Serialization
 			min = Math.min(min, i);
 		}
 		
-		boolean fitsInByte = 0>=min && max<=255;
+		boolean fitsInByte = 0<=min && max<=255;
 		boolean fitsInShort = Short.MIN_VALUE>=min && max<=Short.MAX_VALUE;
 
 
@@ -610,7 +611,7 @@ public final class Serialization
 			LongPacker.packInt(da,obj.length);
 			for(int i:obj)
 				da.write(i);
-		}else if(0>=min && max<=Integer.MAX_VALUE){
+		}else if(0<=min && max<=Integer.MAX_VALUE){
 			da.write(ARRAY_INT_PACKED);
 			LongPacker.packInt(da,obj.length);
 			for(int l : obj)
@@ -621,7 +622,7 @@ public final class Serialization
 			for(int i:obj)
 				da.writeShort(i);
 		}else{
-			da.write(ARRAY_INT_S);
+			da.write(ARRAY_INT_I);
 			LongPacker.packInt(da,obj.length);
 			for(int i:obj)
 				da.writeInt(i);									
@@ -758,7 +759,7 @@ public final class Serialization
         throws ClassNotFoundException, IOException
     {
 
-        ClassLoadingAwareObjectInputStream ois = new ClassLoadingAwareObjectInputStream( buf );
+        ObjectInputStream ois = new ObjectInputStream( buf );
         Object ret =  ois.readObject();
         if(buf.readByte()!=END_OF_NORMAL_SERIALIZATION)
         	throw new IOException("Wrong magic after serialization, maybe is Externalizable and wrong amount of bytes was read?");
@@ -1035,9 +1036,9 @@ public final class Serialization
 
 		int[] ret = new int[size];
 		for(int i=0;i<size;i++){
-			ret[i] = is.read();
-			if(ret[i] <0)
-	    	    throw new EOFException();
+            ret[i] = is.read();
+         			if(ret[i] <0)
+         	    	    throw new EOFException();
 		}
 		return ret;	}
 

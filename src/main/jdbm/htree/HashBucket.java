@@ -16,14 +16,13 @@
 
 package jdbm.htree;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import java.awt.image.Kernel;
+import java.io.*;
 import java.util.ArrayList;
 
-import jdbm.Serializer;
 import jdbm.SerializerInput;
 import jdbm.SerializerOutput;
+import jdbm.btree.BPage;
 import jdbm.helper.LongPacker;
 import jdbm.helper.Serialization;
 
@@ -234,32 +233,34 @@ final class HashBucket<K,V>
     public void writeExternal( SerializerOutput out )
         throws IOException
     {
-        out.writePackedInt(_depth);
 
-        Serializer<K> keySerializer = tree.getKeySerializer();
-        if( keySerializer ==null ) {
-            Serialization.writeObject(out, _keys);
-        } else {
-            out.writePackedInt(_keys.size());
+    	LongPacker.packInt(out, _depth);
+
+        ArrayList keys = (ArrayList) _keys.clone();
+        //write keys
+        if(tree.keySerializer!=null){
             for(int i = 0;i<_keys.size();i++){
-                K key = _keys.get(i);
-                if( key != null ) {
-                    out.writeBoolean(true);
-                    keySerializer.serialize(out, key);
-                } else {
-                    out.writeBoolean(false);
-                }
-            }
-        }
+                if(keys.get(i)==null)  continue;
+                //transform to byte array
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                tree.keySerializer.serialize(new SerializerOutput(baos), (K) keys.get(i));
+                keys.set(i, baos.toByteArray());
 
-        Serializer<V> valueSerializer = tree.getValueSerializer();
+            }
+
+        }
+        Serialization.writeObject(out, keys);
+
+        //write values
         for(int i = 0;i<_keys.size();i++){
         	if(_keys.get(i) == null)
         		continue;
-            if( valueSerializer==null ) {
-            	Serialization.writeObject(out, _values.get(i));
-            } else {
-                valueSerializer.serialize(out, _values.get(i));
+            if(tree.valueSerializer==null)
+        	    Serialization.writeObject(out, _values.get(i));
+            else{
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		        tree.valueSerializer.serialize(new SerializerOutput(baos), _values.get(i));
+		        BPage.writeByteArray(out, baos.toByteArray());
             }
         }
         
@@ -271,36 +272,33 @@ final class HashBucket<K,V>
      */
     public void readExternal(SerializerInput in)
     throws IOException, ClassNotFoundException {
-        _depth = in.readPackedInt();
+        _depth = LongPacker.unpackInt(in);
 
-        Serializer<K> keySerializer = tree.getKeySerializer();
-        if( keySerializer ==null ) {
-            _keys = (ArrayList<K>) Serialization.readObject(in);
-        } else {
-            int size = in.readPackedInt();
-            _keys = new ArrayList<K>(size);
-            for( int i=0; i<size; i++) {
-                if( in.readBoolean() ) {
-                    _keys.add(keySerializer.deserialize(in));
-                } else {
-                    _keys.add(null);
-                }
+        //read keys
+        ArrayList keys = (ArrayList) Serialization.readObject(in);
+        if(tree.keySerializer!=null){
+            //deserialize from byte array
+            for(int i =0; i<keys.size(); i++){
+                byte[] serialized = (byte[]) keys.get(i);
+                if(serialized == null)  continue;
+                K key = tree.keySerializer.deserialize(new SerializerInput(new ByteArrayInputStream(serialized)));
+                keys.set(i, key);
             }
         }
+        _keys = keys;
 
-        Serializer<V> valueSerializer = tree.getValueSerializer();
+         //read values
         _values = new ArrayList<V>(_keys.size());
         for(int i = 0;i<_keys.size();i++){
         	if(_keys.get(i) == null)
         		_values.add(null);
-        	else {
-                if( valueSerializer==null ) {
-                    _values.add((V) Serialization.readObject(in));
-                } else {
-                    _values.add(valueSerializer.deserialize(in));
-                }
+        	else if(tree.valueSerializer==null)
+        		_values.add((V) Serialization.readObject(in));
+            else{
+  		          byte[] serialized = BPage.readByteArray( in );
+                  V val = tree.valueSerializer.deserialize(new SerializerInput(new ByteArrayInputStream(serialized)));
+		          _values.add(val);
             }
-
         }
 
     }

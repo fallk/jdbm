@@ -32,6 +32,9 @@ final class FreePhysicalRowIdPageManager {
 	protected PageManager _pageman;
 
 	private int blockSize;
+
+        /** if true, new records are always placed to end of file, new space is not reclaimed */
+        private boolean appendToEnd = false;
 	
 	final ArrayList<Long> freeBlocksInTransactionRowid = new ArrayList<Long>();
 	final ArrayList<Integer> freeBlocksInTransactionSize = new ArrayList<Integer>();
@@ -39,12 +42,15 @@ final class FreePhysicalRowIdPageManager {
 	/**
 	 * Creates a new instance using the indicated record file and page manager.
 	 */
-	FreePhysicalRowIdPageManager(RecordFile file, PageManager pageman) throws IOException {
+	FreePhysicalRowIdPageManager(RecordFile file, PageManager pageman, boolean append) throws IOException {
 		_file = file;
 		_pageman = pageman;
 		this.blockSize = file.BLOCK_SIZE;
+                this.appendToEnd = append;
 
 	}
+
+        private int lastMaxSize = -1;
 
 	/**
 	 * Returns a free physical rowid of the indicated size, or null if nothing was found. This scans the free physical
@@ -54,15 +60,24 @@ final class FreePhysicalRowIdPageManager {
 	 * record in bytes.
 	 */
 	long get(int size) throws IOException {
+                //never reclaim used space
+                if(appendToEnd) return 0;
+
+                //requested record is bigger than any previously found
+                if(lastMaxSize!=-1 && size>lastMaxSize)
+                    return 0;
+
 		// Loop through the free physical rowid list until we find
 		// a rowid that's large enough.
 		long retval = 0;
 		PageCursor curs = new PageCursor(_pageman, Magic.FREEPHYSIDS_PAGE);
-
+                int maxSize = -1;
 		while (curs.next() != 0) {
 			FreePhysicalRowIdPage fp = FreePhysicalRowIdPage.getFreePhysicalRowIdPageView(_file.get(curs.getCurrent()), blockSize);
 			int slot = fp.getFirstLargerThan(size);
-			if (slot != -1) {
+			if (slot > 0) {
+                                //reset maximal size, as record has changed
+                                lastMaxSize = -1;
 				// got one!
 				retval = fp.slotToLocation(slot);
 
@@ -77,11 +92,16 @@ final class FreePhysicalRowIdPageManager {
 
 				return retval;
 			} else {
+                                if(maxSize<-slot)
+                                    maxSize=-slot;
 				// no luck, go to next page
 				_file.release(curs.getCurrent(), false);
 			}
 
 		}
+                //update maximal size available
+                lastMaxSize = maxSize;
+
 		return 0;
 	}
 

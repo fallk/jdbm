@@ -141,12 +141,14 @@ final class FreePhysicalRowIdPage extends PageHeader {
 	}
 
 	/**
-	 * Returns first slot with available size >= indicated size, or -1 if no slots are available.
+	 * Returns first slot with available size >= indicated size, or minus maximal size available on this page
 	 * 
-	 * @param size
-	 *            The requested allocation size.
+	 * @param requestedSize The requested allocation size.
+     *
 	 **/
-	int getFirstLargerThan(int size) {
+	int getFirstLargerThan(final int requestedSize) {
+
+                int maxSize = 0;
 		/*
 		 * Tracks slot of the smallest available physical row on the page.
 		 */
@@ -154,7 +156,7 @@ final class FreePhysicalRowIdPage extends PageHeader {
 		/*
 		 * Tracks size of the smallest available physical row on the page.
 		 */
-		int bestSlotSize = 0;
+		int bestSlotWaste = 0;
 		/*
 		 * Scan each slot in the page.
 		 */
@@ -167,18 +169,20 @@ final class FreePhysicalRowIdPage extends PageHeader {
 			// Note: isAllocated(i) is equiv to get(i).getSize() != 0
 			//long theSize = get(i).getSize(); // capacity of this free record.
 			short pos = slotToOffset(i);
-			long theSize = FreePhysicalRowId_getSize(pos); // capacity of this free record.
-			long waste = theSize - size; // when non-negative, record has suf. capacity.
+			int currentRecSize = FreePhysicalRowId_getSize(pos); // capacity of this free record.
+            if(currentRecSize>maxSize)
+                maxSize = currentRecSize;
+			int waste = currentRecSize - requestedSize; // when non-negative, record has suf. capacity.
 			if (waste >= 0) {
 				if (waste < wasteMargin) {
 					return i; // record has suf. capacity and not too much waste.
-				} else if (bestSlotSize >= size) {
+				} else if (bestSlotWaste >= waste) {
 					/*
 					 * This slot is a better fit that any that we have seen so far on this page so we update the slot#
 					 * and available size for that slot.
 					 */
 					bestSlot = i;
-					bestSlotSize = size;
+					bestSlotWaste = waste;
 				}
 			}
 		}
@@ -188,8 +192,7 @@ final class FreePhysicalRowIdPage extends PageHeader {
 			 * this point we check to see whether it is under our second wasted capacity limit. If it is, then we return
 			 * that slot.
 			 */
-			long waste = bestSlotSize - size; // when non-negative, record has suf. capacity.
-			if (waste >= 0 && waste < wasteMargin2) {
+            if (bestSlotWaste < wasteMargin2)  {
 				// record has suf. capacity and not too much waste.
 				return bestSlot;
 			}
@@ -197,7 +200,8 @@ final class FreePhysicalRowIdPage extends PageHeader {
 			 * Will scan next page on the free physical row page list.
 			 */
 		}
-		return -1;
+
+		return -maxSize;
 	}
 
 	public long slotToLocation(int slot) {

@@ -17,10 +17,13 @@
 package jdbm.recman;
 
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOError;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.channels.FileLock;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -30,6 +33,7 @@ import java.util.zip.DeflaterOutputStream;
 import java.util.zip.Inflater;
 import java.util.zip.InflaterInputStream;
 
+import jdbm.RecordManager;
 import jdbm.Serializer;
 import jdbm.SerializerInput;
 import jdbm.SerializerOutput;
@@ -72,12 +76,12 @@ public final class BaseRecordManager
 	static final int TRANS_BLOCK_SIZE = 1024 * 2;
 	static final int FREE_BLOCK_SIZE = 1024;
 	
-	/**
+    /**
 	 * Version of storage. It should be safe to open lower versions, but engine should throw exception
 	 * while opening new versions (as it contains unsupported features or serialization)
 	 */
 	static final long STORE_FORMAT_VERSION = 1L;
-	
+
     /**
      * Underlying file for store records.
      */
@@ -93,6 +97,33 @@ public final class BaseRecordManager
      */
     private PhysicalRowIdManager _physMgr;
 
+
+    /** if true, new records alwayes saved to end of file
+     * and free space is not reclaimed.
+     * This may speed up some operations which involves lot of
+     * updates and inserts (batch creation);
+     * You need to reopen store to apply effect
+     */
+    public boolean isAppendToEnd() {
+        return appendToEnd;
+    }
+    /** if true, new records alwayes saved to end of file
+     * and free space is not reclaimed.
+     * This may speed up some operations which involves lot of
+     * updates and inserts (batch creation);
+     *
+     * You need to reopen store to apply effect
+     */
+    public void setAppendToEnd(boolean appendToEnd) {
+        this.appendToEnd = appendToEnd;
+    }
+
+    /** if true, new records alwayes saved to end of file
+     * and free space is not reclaimed.
+     * This may speed up some operations which involves lot of
+     * updates and inserts (batch creation);
+      */
+    private boolean appendToEnd = false;
 
     /**
      * Underlying file for store records.
@@ -156,16 +187,16 @@ public final class BaseRecordManager
      * Reserved slot for name directory.
      */
     public static final int NAME_DIRECTORY_ROOT = 0;
-    
-    
+
+
     /**
      * Reserved slot for version number
      */
     public static final int STORE_VERSION_NUMBER_ROOT = 1;
-	
-	
 
-    
+
+
+
     /** is Inflate compression on */
 	private boolean compress = false;
 
@@ -181,7 +212,7 @@ public final class BaseRecordManager
 	private final SerializerOutput _insertOut = new SerializerOutput(_insertBAO);
 	private final OpenByteArrayInputStream _insertBAI = new OpenByteArrayInputStream(_insertBuffer);
 	private final SerializerInput _insertIn = new SerializerInput(_insertBAI);
-	
+
 	volatile private boolean bufferInUse = false;
 
 
@@ -208,8 +239,8 @@ public final class BaseRecordManager
         _physFile = new RecordFile( _filename + DBR, DATA_BLOCK_SIZE);
         _physPageman = new PageManager( _physFile );
         _physMgr = new PhysicalRowIdManager( _physFile, _physPageman, 
-        		new FreePhysicalRowIdPageManager(_physFileFree, _physPagemanFree));
-                
+        		new FreePhysicalRowIdPageManager(_physFileFree, _physPagemanFree,appendToEnd));
+        
         _logicFileFree= new RecordFile( _filename +IDF,FREE_BLOCK_SIZE );
         _logicPagemanFree = new PageManager( _logicFileFree );
         if(TRANS_BLOCK_SIZE>256*8)
@@ -292,7 +323,6 @@ public final class BaseRecordManager
         
         _logicFileFree.close();
         _logicFileFree = null;
-
     }
 
 
@@ -321,6 +351,7 @@ public final class BaseRecordManager
         try{
         		
         	bufferInUse = true;
+                _insertOut.__resetWrittenCounter();
         	return insert2(obj, serializer,_insertBuffer,_insertBAO,_insertOut);
         }finally{
         	bufferInUse = false;
@@ -372,7 +403,7 @@ public final class BaseRecordManager
     		inflater.reset();
     	}
     	
-    	return new SerializerInput(new InflaterInputStream(data,inflater));    	
+    	return new SerializerInput(new InflaterInputStream(data,inflater));
 	}
 
     public synchronized void delete( long logRowId )
@@ -391,7 +422,7 @@ public final class BaseRecordManager
 
         logRowId = decompressRecid(logRowId);
         
-        long physRowId = _logicMgr.fetch( logRowId );
+        long physRowId = _logicMgr.fetch(logRowId);
         _physMgr.delete( physRowId );
         _logicMgr.delete( logRowId );
     }
@@ -417,7 +448,7 @@ public final class BaseRecordManager
 
         try{        
         	bufferInUse = true;
-        	
+        	_insertOut.__resetWrittenCounter();
         	update2(recid, obj, serializer,_insertBuffer, _insertBAO, _insertOut);
         }finally{
         	bufferInUse = false;
@@ -443,7 +474,7 @@ public final class BaseRecordManager
 		if ( DEBUG ) {
 			System.out.println( "BaseRecordManager.update() recid " + logRecid + " length " + insertBAO.size() ) ;
 		}
-      
+
 		long newRecid = _physMgr.update( physRecid, insertBAO.getBuf(), 0, insertBAO.size() );
 		
 		_logicMgr.update( logRecid, newRecid );
@@ -474,13 +505,13 @@ public final class BaseRecordManager
     	}
         try{
         	bufferInUse = true;
-
+                _insertOut.__resetWrittenCounter();
         	return fetch2(recid, serializer,_insertBuffer,_insertBAO,_insertOut,_insertBAI, _insertIn);
         }finally{
         	bufferInUse = false;
         }
     }
-    
+
     public synchronized <A> A fetch( long recid, Serializer<A> serializer, boolean disableCache ) throws IOException{
     	//we dont have any cache, so can ignore disableCache parameter
     	return fetch(recid, serializer);
@@ -492,7 +523,7 @@ public final class BaseRecordManager
 				OpenByteArrayOutputStream insertBAO, SerializerOutput insertOut,
 				OpenByteArrayInputStream insertBAI, SerializerInput insertIn)
 			throws IOException {
-		
+
 		recid = decompressRecid(recid);
 		
 		insertBAO.reset(insertBuffer);		
@@ -624,11 +655,11 @@ public final class BaseRecordManager
     private void saveNameDirectory( Map<String,Long> directory )
         throws IOException
     {
-        long recid = getRoot( NAME_DIRECTORY_ROOT );
+        long recid = getRoot(NAME_DIRECTORY_ROOT);
         if ( recid == 0 ) {
             throw new IOException( "Name directory must exist" );
         }
-        update( recid, _nameDirectory );
+        update(recid, _nameDirectory);
     }
 
 
@@ -753,7 +784,7 @@ public final class BaseRecordManager
 	/**
 	 * Insert data at forced logicalRowId, use only for defragmentation !! 
 	 * @param logicalRowId 
-	 * @param bb data
+	 * @param data
 	 * @throws IOException 
 	 */
 	private void forceInsert(long logicalRowId, byte[] data) throws IOException {
@@ -785,4 +816,8 @@ public final class BaseRecordManager
 		long block = recid >>8;
         short offset = (short) (((recid & 0xff) ) * 8+TranslationPage.O_TRANS);
 		return Location.toLong(block, offset);
-	}}
+	}
+
+
+
+}

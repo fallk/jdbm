@@ -399,9 +399,6 @@ final class HashDirectory <K,V>
         _depth = in.readByte();
         _children = new long[MAX_CHILDREN];
         int zeroStart = in.read();
-        if(zeroStart == 255)
-        	return;
-        
         int zeroEnd = in.read();
 
         for(int i = zeroStart; i<=zeroEnd;i++){        	
@@ -543,7 +540,8 @@ final class HashDirectory <K,V>
                 // node is a bucket
                 HashBucket bucket = (HashBucket)node;
                 if ( _iterateKeys ) {
-                    _iter = bucket.getKeys().iterator();
+                     ArrayList keys2 = (ArrayList) bucket.getKeys().clone();
+                    _iter = keys2.iterator();
                 } else {
                     _iter = bucket.getValues().iterator();
                 }
